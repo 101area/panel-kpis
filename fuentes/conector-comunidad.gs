@@ -22,7 +22,7 @@
  * el ID interno del miembro.
  */
 
-const TOKEN = 'otro-PON-AQUI-EL-TOKEN-DEL-TDC56*';
+const TOKEN = 'PON-AQUI-EL-TOKEN-DE-COMUNIDAD';
 
 /* Insights IA (opcional): la clave vive AQUI, en servidor; jamás en el panel.
    Recomendado: rota la clave en platform.openai.com si la has compartido por chat. */
@@ -31,6 +31,7 @@ const HUBSPOT_PAT = 'PEGA-AQUI-TU-PAT-DE-HUBSPOT-O-DEJALO-ASI';
 /* Informe de los lunes 8:00 por correo. Pon destinatarios ('a@x.com,b@x.com')
    y vuelve a ejecutar instalar() para crear el disparador. Vacío = apagado. */
 const CORREOS_INFORME = '';
+const NPS_SHEET_ID = '1oFApWiAiUSTescI6IFbv4W1Fyo2NFw2uMDYP3Aj7GzY';  // encuesta semestral de miembros
 const FOLDER_ID = '1BAZ15zXXRN7y4XesqceThgvrW3p0OsNI';   // carpeta raíz, la que tiene 2026/
 
 const MAX_SEGUNDOS = 240;
@@ -394,7 +395,9 @@ function doGet(e) {
       }),
       dias: tabla(ss, T.LOG).length,
       errores: tabla(ss, T.LOG).filter(function (r) { return r[2] === 'error'; })
-        .map(function (r) { return { fecha: iso(r[1]), nota: r[4] }; })
+        .map(function (r) { return { fecha: iso(r[1]), nota: r[4] }; }),
+      nps: leerNPS(),
+      rds: leerRDS(ss)
     });
   } catch (err) {
     return json({ error: String(err) });
@@ -410,6 +413,68 @@ function tabla(ss, nombre) {
 function json(o) {
   return ContentService.createTextOutput(JSON.stringify(o))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ============================== NPS semestral (encuesta) ============================== */
+function leerNPS() {
+  try {
+    const sh = SpreadsheetApp.openById(NPS_SHEET_ID).getSheets()[0];
+    const vals = sh.getDataRange().getValues();
+    let n = 0, pro = 0, pas = 0, det = 0, fecha = '', porOrg = [], ponentes = [];
+    for (let i = 1; i < vals.length; i++) {
+      const r = vals[i];
+      const score = num(r[3]) != null && r[3] !== '' ? num(r[3]) : num(r[12]);
+      if (score == null) continue;
+      n++;
+      if (score >= 9) pro++; else if (score >= 7) pas++; else det++;
+      const f = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM') : String(r[0]).slice(6, 10) + '-' + ('0' + String(r[0]).split('/')[1]).slice(-2);
+      if (f > fecha) fecha = f;
+      porOrg.push({ org: String(r[2] || '').trim(), score: score });
+      if (/^s[ií]/i.test(String(r[10] || ''))) ponentes.push({ nombre: String(r[1] || '').trim(), org: String(r[2] || '').trim() });
+    }
+    if (!n) return [];
+    return [{ fecha: fecha, n: n, promotores: pro, pasivos: pas, detractores: det,
+      nps: Math.round(100 * (pro - det) / n), porOrg: porOrg, ponentes: ponentes }];
+  } catch (err) { return []; }
+}
+
+/* ============================== ingesta y servicio de datos RDS ============================== */
+function doPost(e) {
+  const p = (e && e.parameter) || {};
+  if (TOKEN && p.token !== TOKEN) return json({ error: 'Token no válido' });
+  try {
+    const carga = JSON.parse(e.postData.contents || '{}');
+    const ds = carga.datasets || {};
+    const ss = cache();
+    const resumen = {};
+    Object.keys(ds).forEach(function (k) {
+      const filas = ds[k] || [];
+      const nombre = 'rds_' + k.replace(/[^a-z0-9_]/gi, '').slice(0, 40);
+      let sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
+      sh.clearContents();
+      if (!filas.length) { resumen[k] = 0; return; }
+      const cabs = Object.keys(filas[0]);
+      const matriz = [cabs].concat(filas.map(function (f) { return cabs.map(function (c) { return f[c]; }); }));
+      sh.getRange(1, 1, matriz.length, cabs.length).setValues(matriz);
+      resumen[k] = filas.length;
+    });
+    return json({ ok: true, filas: resumen, recibido: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm') });
+  } catch (err) { return json({ error: 'doPost: ' + err }); }
+}
+
+function leerRDS(ss) {
+  const out = {};
+  ss.getSheets().forEach(function (sh) {
+    const nombre = sh.getName();
+    if (nombre.indexOf('rds_') !== 0) return;
+    const vals = sh.getDataRange().getValues();
+    if (vals.length < 2) return;
+    const cabs = vals[0];
+    out[nombre.slice(4)] = vals.slice(1).map(function (r) {
+      const o = {}; cabs.forEach(function (c, i) { o[c] = r[i]; }); return o;
+    });
+  });
+  return out;
 }
 
 /* ============================== HubSpot: negocios abiertos ============================== */
