@@ -445,7 +445,7 @@ function doPost(e) {
   try {
     const carga = JSON.parse(e.postData.contents || '{}');
     const ds = carga.datasets || {};
-    const ss = cache();
+    const ss = SpreadsheetApp.getActive();
     const resumen = {};
     Object.keys(ds).forEach(function (k) {
       const filas = ds[k] || [];
