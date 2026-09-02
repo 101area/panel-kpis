@@ -469,6 +469,58 @@ function leerNPS() {
   } catch (err) { return []; }
 }
 
+/* ============================== v9.3 · relé de preguntas ============================== */
+/* El panel manda la pregunta ya con su contexto recuperado:
+     hechos:   líneas con números calculados por el panel (no se recalculan)
+     pasajes:  [{etiqueta, texto}] extraídos de reuniones, correos, encuesta,
+               notas del equipo, TDC y plataforma
+   Aquí solo se redacta. Sin contexto no hay respuesta. */
+function responderPregunta(carga) {
+  const q = String((carga && carga.pregunta) || '').trim();
+  if (!q) return { error: 'pregunta vacía' };
+  if (!OPENAI_KEY || OPENAI_KEY.indexOf('PEGA-AQUI') === 0)
+    return { error: 'Falta la clave de OpenAI en el conector (constante OPENAI_KEY)' };
+
+  const hechos = (carga.hechos || []).slice(0, 60);
+  const pasajes = (carga.pasajes || []).slice(0, 40);
+  let ctx = '';
+  if (hechos.length) ctx += 'HECHOS (calculados por el panel; úsalos tal cual):\n' + hechos.join('\n') + '\n\n';
+  if (pasajes.length) ctx += 'PASAJES:\n' + pasajes.map(function (p) {
+    return '[' + String(p.etiqueta || '?') + '] ' + String(p.texto || '').slice(0, 1200);
+  }).join('\n') + '\n';
+  if (!ctx) return { error: 'sin contexto: el panel no encontró nada que leer' };
+  if (ctx.length > 46000) ctx = ctx.slice(0, 46000) + '\n…(contexto recortado)';
+
+  const sistema = 'Eres el analista de Area101, una comunidad B2B de innovación corporativa. ' +
+    'Respondes SOLO con lo que aparece en HECHOS y PASAJES. ' +
+    'Los números y las fechas vienen dados en HECHOS: cópialos, no los recalcules ni los estimes. ' +
+    'Si la respuesta no está en el contexto, responde exactamente: No está en los datos que tengo. ' +
+    'Cita entre corchetes las etiquetas de los pasajes que uses. ' +
+    'Castellano, tono directo y profesional, sin markdown, sin viñetas con asteriscos, ' +
+    'máximo 10 líneas. Cuando la pregunta pida una lista, da la lista y nada más.';
+
+  try {
+    const r = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      headers: { Authorization: 'Bearer ' + OPENAI_KEY },
+      payload: JSON.stringify({ model: 'gpt-4o-mini', temperature: 0.2, max_tokens: 700,
+        messages: [
+          { role: 'system', content: sistema },
+          { role: 'user', content: 'PREGUNTA: ' + q + '\n\n' + ctx }
+        ] })
+    });
+    if (r.getResponseCode() !== 200)
+      return { error: 'OpenAI HTTP ' + r.getResponseCode() + ': ' + String(r.getContentText()).slice(0, 200) };
+    const d = JSON.parse(r.getContentText());
+    return {
+      texto: ((d.choices[0].message.content) || '').trim(),
+      generado: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm'),
+      pasajes: pasajes.length, hechos: hechos.length,
+      tokens: (d.usage && d.usage.total_tokens) || null
+    };
+  } catch (err) { return { error: 'OpenAI: ' + err }; }
+}
+
 /* ============================== v9.4 · agenda y borradores ============================== */
 /* Requieren dos permisos nuevos (Calendario en lectura, Gmail en redacción):
    Apps Script los pide la primera vez que se ejecuta probar() desde el editor. */
@@ -514,6 +566,10 @@ function crearBorrador(carga) {
 function doPost(e) {
   const p = (e && e.parameter) || {};
   if (TOKEN && p.token !== TOKEN) return json({ error: 'Token no válido' });
+  if (p.accion === 'pregunta') {
+    try { return json(responderPregunta(JSON.parse((e.postData && e.postData.contents) || '{}'))); }
+    catch (err) { return json({ error: 'pregunta: ' + err }); }
+  }
   if (p.accion === 'borrador') {
     try { return json(crearBorrador(JSON.parse((e.postData && e.postData.contents) || '{}'))); }
     catch (err) { return json({ error: 'borrador: ' + err }); }
@@ -661,6 +717,11 @@ function insightsIA() {
 /* ============================== comprobación ============================== */
 
 function probar() {
+  try {
+    const pr = responderPregunta({ pregunta: '¿Cuántas cuentas de pago hay?',
+      hechos: ['Cuentas de pago: 26.'], pasajes: [{ etiqueta: 'prueba', texto: 'Dato de prueba del conector.' }] });
+    Logger.log('Pregúntale: ' + (pr.error ? 'ERROR → ' + pr.error : 'OK → ' + String(pr.texto).slice(0, 80)));
+  } catch (e) { Logger.log('Pregúntale: ' + e); }
   try { Logger.log('Agenda 7 días: ' + ((agendaSemana().eventos || []).length) + ' eventos (permiso de Calendario OK)'); }
   catch (e) { Logger.log('Agenda: ' + e); }
   try { Logger.log('Borradores en Gmail: ' + GmailApp.getDrafts().length + ' (permiso de Gmail OK)'); }
