@@ -416,11 +416,29 @@ function json(o) {
 }
 
 /* ============================== NPS semestral (encuesta) ============================== */
+/* Busca una columna por trozos de su enunciado; si no la encuentra, usa el
+   índice de reserva (el que tenía el formulario en septiembre de 2026). */
+function colPorTexto(cabs, trozos, reserva) {
+  for (let i = 0; i < cabs.length; i++) {
+    const c = String(cabs[i] || '').toLowerCase();
+    for (let j = 0; j < trozos.length; j++) if (c.indexOf(trozos[j]) >= 0) return i;
+  }
+  return reserva;
+}
+
 function leerNPS() {
   try {
     const sh = SpreadsheetApp.openById(NPS_SHEET_ID).getSheets()[0];
     const vals = sh.getDataRange().getValues();
-    let n = 0, pro = 0, pas = 0, det = 0, fecha = '', porOrg = [], ponentes = [];
+    let n = 0, pro = 0, pas = 0, det = 0, fecha = '', porOrg = [], ponentes = [], respuestas = [];
+    const cabs = vals[0] || [];
+    const C = {
+      reto:      colPorTexto(cabs, ['principal reto'], 4),
+      aporta:    colPorTexto(cabs, ['valor te ha aportado', 'más valor'], 5),
+      querria:   colPorTexto(cabs, ['iniciativas te gustaría ver', 'próximo semestre'], 6),
+      tematicas: colPorTexto(cabs, ['temáticas te gustaría'], 7),
+      idea:      colPorTexto(cabs, ['ideas joserra'], 13)
+    };
     for (let i = 1; i < vals.length; i++) {
       const r = vals[i];
       const score = num(r[3]) != null && r[3] !== '' ? num(r[3]) : num(r[12]);
@@ -430,11 +448,22 @@ function leerNPS() {
       const f = r[0] instanceof Date ? Utilities.formatDate(r[0], Session.getScriptTimeZone(), 'yyyy-MM') : String(r[0]).slice(6, 10) + '-' + ('0' + String(r[0]).split('/')[1]).slice(-2);
       if (f > fecha) fecha = f;
       porOrg.push({ org: String(r[2] || '').trim(), score: score });
+      respuestas.push({
+        org: String(r[2] || '').trim(),
+        nombre: String(r[1] || '').trim(),
+        nota: score,
+        reto: String(r[C.reto] || '').trim(),
+        aporta: String(r[C.aporta] || '').trim(),
+        querria: String(r[C.querria] || '').trim(),
+        tematicas: String(r[C.tematicas] || '').trim(),
+        idea: String(r[C.idea] || '').trim()
+      });
       if (/^s[ií]/i.test(String(r[10] || ''))) ponentes.push({ nombre: String(r[1] || '').trim(), org: String(r[2] || '').trim() });
     }
     if (!n) return [];
     return [{ fecha: fecha, n: n, promotores: pro, pasivos: pas, detractores: det,
-      nps: Math.round(100 * (pro - det) / n), porOrg: porOrg, ponentes: ponentes }];
+      nps: Math.round(100 * (pro - det) / n), porOrg: porOrg, ponentes: ponentes,
+      respuestas: respuestas }];
   } catch (err) { return []; }
 }
 
