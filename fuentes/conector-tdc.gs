@@ -307,7 +307,78 @@ function leerObjetivos(ss) {
 /* ============================ comprobación ============================ */
 
 /** Ejecuta esto desde el editor para ver si el conector lee bien el TDC. */
+/* ============================== digest semanal ============================== */
+
+const PANEL_URL = 'https://101area.github.io/panel-kpis/';
+
+/** Crea el disparador de los lunes a las 8. Ejecútala una vez desde el editor. */
+function instalarDigest() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'digestSemanal') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('digestSemanal').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
+  Logger.log('Digest semanal programado: lunes a las 8:00');
+}
+
+/** Reparte por dueño las acciones abiertas del estado compartido. */
+function repartoAcciones(estado) {
+  const acc = (estado && estado.acciones) || {};
+  const equipo = (estado && estado.equipo) || [];
+  const hoy = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const porQuien = {}, huerfanas = [];
+  Object.keys(acc).forEach(function (k) {
+    const a = acc[k] || {};
+    const atendida = a.estado === 'atendida' && (!a.hasta || String(a.hasta).slice(0, 10) >= hoy);
+    if (atendida) return;
+    if (a.quien) { (porQuien[a.quien] = porQuien[a.quien] || []).push(a); }
+    else if (a.t) huerfanas.push(a);
+  });
+  return { porQuien: porQuien, huerfanas: huerfanas, equipo: equipo };
+}
+
+function digestSemanal() {
+  const ss = SpreadsheetApp.getActive();
+  const estado = leerEstado(ss) || {};
+  const r = repartoAcciones(estado);
+  const enviados = [];
+  r.equipo.forEach(function (p) {
+    if (!p.email) return;
+    const mias = r.porQuien[p.nombre] || [];
+    if (!mias.length && p.rol !== 'direccion') return;
+    const L = [];
+    L.push('Hola ' + p.nombre + ',');
+    L.push('');
+    if (mias.length) {
+      L.push('Tienes ' + mias.length + ' acción' + (mias.length > 1 ? 'es' : '') + ' abierta' + (mias.length > 1 ? 's' : '') + ':');
+      mias.forEach(function (a) { L.push('  · ' + a.t + (a.nota ? '  [' + a.nota + ']' : '')); });
+    } else L.push('No tienes nada asignado ahora mismo.');
+    if (p.rol === 'direccion') {
+      L.push('');
+      L.push('Reparto del equipo:');
+      Object.keys(r.porQuien).forEach(function (q) { L.push('  · ' + q + ': ' + r.porQuien[q].length); });
+      L.push('  · sin dueño: ' + r.huerfanas.length);
+      if (r.huerfanas.length) {
+        L.push('');
+        L.push('Sin dueño:');
+        r.huerfanas.slice(0, 10).forEach(function (a) { L.push('  · ' + a.t); });
+      }
+    }
+    L.push('');
+    L.push('Panel: ' + PANEL_URL);
+    MailApp.sendEmail({ to: p.email, subject: 'Tu semana en el panel · ' +
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'd MMM'), body: L.join('\n') });
+    enviados.push(p.email);
+  });
+  Logger.log('Digest enviado a: ' + (enviados.join(', ') || '(nadie: falta el equipo en Datos › Equipo)'));
+  return { enviados: enviados, sinDuenno: r.huerfanas.length };
+}
+
 function probar() {
+  try {
+    const rr = repartoAcciones(leerEstado(SpreadsheetApp.getActive()) || {});
+    Logger.log('Digest: ' + Object.keys(rr.porQuien).length + ' personas con acciones, ' +
+      rr.huerfanas.length + ' sin dueño, equipo de ' + rr.equipo.length + ' (ejecuta instalarDigest para programarlo)');
+  } catch (e) { Logger.log('Digest: ' + e); }
   const ss = SpreadsheetApp.getActive();
   const lineas = leerLineas(ss);
   const resumen = leerResumen(ss);
