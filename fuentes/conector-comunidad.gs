@@ -509,7 +509,7 @@ function hubspotAbiertos() {
 /* ============================== informe semanal por correo ============================== */
 function informeSemanal() {
   if (!CORREOS_INFORME) return;
-  const ss = cache();
+  const ss = SpreadsheetApp.getActive();
   const orgs = tabla(ss, T.ORG), mems = tabla(ss, T.MEM), evs = tabla(ss, T.EV);
   const hoy = new Date(), mes = Utilities.formatDate(hoy, Session.getScriptTimeZone(), 'yyyy-MM');
   const act = {}; evs.forEach(function (r) { if (String(r[0]).slice(0, 7) === mes) act[r[1]] = 1; });
@@ -537,7 +537,7 @@ function insightsIA() {
   const cacheado = props.getProperty('insights_' + hoy);
   if (cacheado) return JSON.parse(cacheado);
 
-  const ss = cache();
+  const ss = SpreadsheetApp.getActive();
   const orgs = tabla(ss, T.ORG), mems = tabla(ss, T.MEM), evs = tabla(ss, T.EV);
   const mesAct = hoy.slice(0, 7);
   const pago = orgs.filter(function (r) { return r[3]; }).length;
