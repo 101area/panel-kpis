@@ -31,6 +31,7 @@ const HUBSPOT_PAT = 'PEGA-AQUI-TU-PAT-DE-HUBSPOT-O-DEJALO-ASI';
 /* Informe de los lunes 8:00 por correo. Pon destinatarios ('a@x.com,b@x.com')
    y vuelve a ejecutar instalar() para crear el disparador. Vacío = apagado. */
 const CORREOS_INFORME = '';
+const DOMINIO_PROPIO = '101area.com';   // correos de este dominio no cuentan como cuenta externa
 const NPS_SHEET_ID = '1oFApWiAiUSTescI6IFbv4W1Fyo2NFw2uMDYP3Aj7GzY';  // encuesta semestral de miembros
 const FOLDER_ID = '1BAZ15zXXRN7y4XesqceThgvrW3p0OsNI';   // carpeta raíz, la que tiene 2026/
 
@@ -352,6 +353,7 @@ function doGet(e) {
   if (TOKEN && p.token !== TOKEN) return json({ error: 'Token no válido' });
   if (p.insights) return json(insightsIA());
   if (p.hubspot) return json(hubspotAbiertos());
+  if (p.agenda) return json(agendaSemana());
   try {
     const ss = SpreadsheetApp.getActive();
     const meses = parseInt(p.meses || '18', 10);
@@ -467,10 +469,55 @@ function leerNPS() {
   } catch (err) { return []; }
 }
 
+/* ============================== v9.4 · agenda y borradores ============================== */
+/* Requieren dos permisos nuevos (Calendario en lectura, Gmail en redacción):
+   Apps Script los pide la primera vez que se ejecuta probar() desde el editor. */
+
+function agendaSemana() {
+  try {
+    const ahora = new Date(), fin = new Date(ahora.getTime() + 7 * 86400000);
+    const tz = Session.getScriptTimeZone();
+    const evs = CalendarApp.getDefaultCalendar().getEvents(ahora, fin);
+    return {
+      generado: Utilities.formatDate(ahora, tz, 'yyyy-MM-dd HH:mm'),
+      eventos: evs.slice(0, 60).map(function (ev) {
+        const invitados = ev.getGuestList(true).map(function (x) { return String(x.getEmail() || '').toLowerCase(); }).filter(Boolean);
+        const dominios = {};
+        invitados.forEach(function (m) { const d = m.split('@')[1]; if (d && d !== DOMINIO_PROPIO) dominios[d] = 1; });
+        return {
+          id: ev.getId(),
+          inicio: Utilities.formatDate(ev.getStartTime(), tz, "yyyy-MM-dd'T'HH:mm"),
+          fin: Utilities.formatDate(ev.getEndTime(), tz, "yyyy-MM-dd'T'HH:mm"),
+          todoElDia: ev.isAllDayEvent(),
+          titulo: ev.getTitle(),
+          invitados: invitados,
+          dominios: Object.keys(dominios),
+          descripcion: String(ev.getDescription() || '').slice(0, 300)
+        };
+      })
+    };
+  } catch (err) { return { error: 'agenda: ' + err }; }
+}
+
+function crearBorrador(carga) {
+  const para = String(carga.para || '').trim();
+  const asunto = String(carga.asunto || '').trim();
+  const cuerpo = String(carga.cuerpo || '');
+  if (!asunto) return { error: 'falta el asunto' };
+  const d = GmailApp.createDraft(para, asunto, cuerpo);
+  let url = 'https://mail.google.com/mail/u/0/#drafts';
+  try { url = 'https://mail.google.com/mail/u/0/#drafts/' + d.getMessage().getThread().getId(); } catch (e) { /* sin hilo aún */ }
+  return { ok: true, id: d.getId(), url: url, para: para, asunto: asunto };
+}
+
 /* ============================== ingesta y servicio de datos RDS ============================== */
 function doPost(e) {
   const p = (e && e.parameter) || {};
   if (TOKEN && p.token !== TOKEN) return json({ error: 'Token no válido' });
+  if (p.accion === 'borrador') {
+    try { return json(crearBorrador(JSON.parse((e.postData && e.postData.contents) || '{}'))); }
+    catch (err) { return json({ error: 'borrador: ' + err }); }
+  }
   try {
     const carga = JSON.parse(e.postData.contents || '{}');
     const ds = carga.datasets || {};
@@ -614,6 +661,10 @@ function insightsIA() {
 /* ============================== comprobación ============================== */
 
 function probar() {
+  try { Logger.log('Agenda 7 días: ' + ((agendaSemana().eventos || []).length) + ' eventos (permiso de Calendario OK)'); }
+  catch (e) { Logger.log('Agenda: ' + e); }
+  try { Logger.log('Borradores en Gmail: ' + GmailApp.getDrafts().length + ' (permiso de Gmail OK)'); }
+  catch (e) { Logger.log('Gmail: ' + e); }
   const dias = listarDias();
   Logger.log('Días encontrados en Drive: %s', dias.length);
   if (dias.length) {
